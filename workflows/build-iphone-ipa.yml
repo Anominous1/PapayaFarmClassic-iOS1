@@ -1,0 +1,41 @@
+name: Build iPhone IPA
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'PapayaFarmClassic/**'
+      - 'project.yml'
+      - '.github/workflows/build-iphone-ipa.yml'
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Create Xcode project
+        run: xcodegen generate --spec project.yml
+      - name: Build iOS arm64 app
+        run: |
+          set -euo pipefail
+          xcodebuild -project PapayaFarmClassic.xcodeproj \
+            -scheme PapayaFarmClassic -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/out" \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          mkdir -p dist/Payload
+          cp -R out/Build/Products/Release-iphoneos/PapayaFarmClassic.app dist/Payload/
+          cd dist
+          /usr/bin/zip -qry PapayaFarmClassic_iOS_unsigned.ipa Payload
+          /usr/bin/unzip -t PapayaFarmClassic_iOS_unsigned.ipa
+      - name: Upload sideloading archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: PapayaFarmClassic_iOS_unsigned
+          path: dist/PapayaFarmClassic_iOS_unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,108 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/><title>Papaya Farm Classic</title><style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#284f32;color:#382917;font-family:'Trebuchet MS',Arial,sans-serif;touch-action:none}#screen{display:block;height:100dvh;max-width:100vw;width:auto;aspect-ratio:900/640;margin:auto;background:#a8d447;touch-action:none}#login{position:fixed;inset:0;background:rgba(23,48,26,.87);display:flex;align-items:center;justify-content:center;padding:10px;z-index:30}#login.hidden{display:none}#loginCard{width:min(620px,98vw);max-height:96vh;overflow:auto;border:6px solid #9c6131;background:linear-gradient(#fcebc0,#ead09b);border-radius:25px;text-align:center;box-shadow:0 8px 40px #0008;padding:17px 22px 20px}h1{font-size:clamp(23px,4.5vw,37px);line-height:1.1;margin:3px 0 5px;color:#825022}#subtitle{font-size:14px;margin-bottom:8px;color:#6b532f}#loginFields{display:grid;grid-template-columns:1fr 1fr;gap:9px}#loginFields label:first-child{grid-column:span 2}label{font-weight:bold;display:block;text-align:left;font-size:13px;color:#684322}input{display:block;width:100%;min-height:39px;font:16px Arial,sans-serif;padding:9px;border:2px solid #bc8850;border-radius:8px;background:#fff8df;color:#413011;touch-action:auto}#connectButton{border:0;border-radius:12px;background:#79b44c;color:white;font-size:20px;font-weight:800;padding:11px 30px;box-shadow:0 4px #4e7d30;margin:12px 0 6px}#loginStatus{font-size:13px;min-height:16px;color:#764622}#hint{font-size:12px;line-height:1.3;color:#6f532f;margin-top:6px}#toast{position:fixed;left:50%;bottom:calc(6px + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(251,237,187,.97);border:2px solid #a87b3a;border-radius:12px;color:#5d3d19;font-size:13px;text-align:center;max-width:92vw;padding:7px 12px;pointer-events:none;z-index:25;opacity:0;transition:opacity .2s}#toast.visible{opacity:1}
+</style></head><body>
+<canvas id="screen" width="900" height="640" aria-label="Papaya Farm game screen"></canvas>
+<div id="login"><div id="loginCard"><h1>🌱 Papaya Farm Classic</h1><div id="subtitle">iPhone Edition • Synology NAS multiplayer</div>
+<div id="loginFields"><label>Synology / Tailscale IP address<input id="host" autocomplete="off" autocapitalize="off" placeholder="192.168.1.50 or 100.x.x.x"/></label><label>Farm name<input id="farmName" autocomplete="off" autocapitalize="off" maxlength="16" placeholder="YourFarm"/></label><label>Farm PIN<input id="farmPIN" type="password" maxlength="20" placeholder="4–20 characters"/></label></div>
+<button id="connectButton">Connect to NAS</button><div id="loginStatus">Your farm is stored on your own Synology server.</div><div id="hint">The NAS server must be running on UDP port 37942. For remote play, connect through Tailscale. Use the same farm name and PIN you use on Windows. PINs are transmitted without app-level encryption: use only on trusted networks or through a VPN.</div>
+</div></div><div id="toast"></div>
+<script>
+'use strict';
+const W=900,H=640, cvs=document.getElementById('screen'), ctx=cvs.getContext('2d'),login=document.getElementById('login');
+const atlas=new Image(),farmBG=new Image(),ranchBG=new Image(),panel=new Image();
+atlas.src='atlas.png';farmBG.src='farm_background.png';ranchBG.src='ranch_background.png';panel.src='panel.png';
+const crops=['Wheat','Carrot','Cabbage','Potato','Flowers','Strawberry','Cranberry'];
+const seedCost=[20,30,50,80,140,120,180],cropSell=[38,65,100,175,315,250,480],cropGrowth=[3600,10800,18000,25200,36000,7200,129600],cropLevel=[1,1,2,3,4,3,5];
+const animals=['Chicken','Cow','Sheep'], animalCost=[400,1500,950],animalSale=[65,230,130];
+const state={cash:0,papayas:0,xp:0,rp:0,quick:1,inv:Array(7).fill(0),harvested:Array(7).fill(0),unlocked:Array(20).fill(0),crop:Array(20).fill(0),planted:Array(20).fill(0),weeds:Array(20).fill(0),bugs:Array(20).fill(0),animalOwned:Array(3).fill(0),animalFed:Array(3).fill(0),animalWater:Array(3).fill(0),animalReady:Array(3).fill(0)};
+let connected=false,user='',view='',screen=0,tool=1,rt=2,selected=0,popup='',tab=0,directory=[],total=0,offset=0,clickZones=[],msg='',toastTimer=0,frameCount=0;
+const native=(command)=>{if(window.webkit?.messageHandlers?.papaya){window.webkit.messageHandlers.papaya.postMessage(command)}else{toast('Open this page inside the Papaya Farm iPhone app to connect to your NAS.')}};
+function toast(text){if(!text)return;msg=text;const el=document.getElementById('toast');el.textContent=text;el.classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('visible'),3000)}
+window.onPapayaNative=function(event){
+ if(event.type==='connected'){document.getElementById('loginStatus').textContent=event.message;return}
+ if(event.type==='disconnected'){connected=false;login.classList.remove('hidden');document.getElementById('loginStatus').textContent=event.message;return}
+ if(event.type==='message'){toast(event.message);document.getElementById('loginStatus').textContent=event.message;return}
+ if(event.type==='directory'){directory=event.names;total=event.total;offset=event.offset;popup='friends';return}
+ if(event.type==='snapshot'){
+  Object.assign(state,event.state);connected=true;user=event.name;view=event.target;
+  login.classList.add('hidden');if(event.message)toast(event.message);
+ }
+};
+const host=document.getElementById('host'),farmName=document.getElementById('farmName'),farmPIN=document.getElementById('farmPIN');
+try{host.value=localStorage.getItem('papaya-host')||'';farmName.value=localStorage.getItem('papaya-name')||''}catch(e){}
+document.getElementById('connectButton').onclick=function(){
+ const ip=host.value.trim(),name=farmName.value.trim(),pin=farmPIN.value.trim();
+ if(!ip||!name||pin.length<4){document.getElementById('loginStatus').textContent='Please enter server, farm name, and PIN.';return}
+ try{localStorage.setItem('papaya-host',ip);localStorage.setItem('papaya-name',name)}catch(e){}
+ document.getElementById('loginStatus').textContent='Connecting to '+ip+'...';
+ native({cmd:'connect',ip,name,pin});farmPIN.value='';
+};
+function rr(x,y,w,h,r,fill,stroke=null,lw=2){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.lineWidth=lw;ctx.strokeStyle=stroke;ctx.stroke()}}
+function label(s,x,y,size=19,color='#513b1a',align='center'){ctx.save();ctx.font=`bold ${size}px 'Trebuchet MS',Arial,sans-serif`;ctx.fillStyle=color;ctx.textAlign=align;ctx.textBaseline='middle';ctx.fillText(String(s),x,y);ctx.restore()}
+function pic(img,x,y,w,h){if(img.complete&&img.naturalWidth)ctx.drawImage(img,x,y,w,h)}
+function sprite(idx,x,y,w,h){if(!atlas.complete||!atlas.naturalWidth)return;const sx=(idx%9)*180,sy=Math.floor(idx/9)*120;ctx.drawImage(atlas,sx,sy,180,120,x,y,w,h)}
+function btn(text,x,y,w,h,fn,active=false,size=19){rr(x,y,w,h,10,active?'#72b34c':'#ce8138','#78461e',3);rr(x+7,y+3,w-14,4,2,active?'#d8f29b':'#f7cb79');label(text,x+w/2,y+h/2+2,size,'#fff4cd');clickZones.push({x,y,w,h,fn})}
+function click(x,y,w,h,fn){clickZones.push({x,y,w,h,fn})}
+function plotx(i){return 39+(i%5)*143+Math.floor(i/5)*22}function ploty(i){return 105+Math.floor(i/5)*88}
+function lev(){return 1+Math.floor(state.xp/140)}
+function growth(i){return Math.ceil(cropGrowth[i]/(state.quick?120:1))}
+function clock(s){if(s<=0)return 'READY!';if(s<60)return s+'s';if(s<3600)return Math.ceil(s/60)+'m';return Math.floor(s/3600)+'h '+Math.ceil(s%3600/60)+'m'}
+function maturity(i){if(!state.crop[i])return -1;const time=Date.now()/1000-state.planted[i],end=growth(state.crop[i]-1);return time>=end*3?3:time>=end?2:Math.max(0,Math.min(1,Math.floor(time/(end/2))))}
+function action(kind,a=0,b=0){if(!connected){toast('Not connected to the NAS.');return}native({cmd:'action',kind,a,b})}
+function drawWorld(){pic(screen?ranchBG:farmBG,0,0,W,H);
+ if(!screen){for(let i=0;i<20;i++){const x=plotx(i),y=ploty(i),open=state.unlocked[i];sprite(open?1:0,x,y,177,113);
+   if(open){if(state.crop[i]){const stage=maturity(i),ci=state.crop[i]-1;if(stage===3)sprite(24,x+12,y-20,152,91);else{sprite(3+ci*3+stage,x+8,y-24,166,99);if(stage===2){rr(x+97,y+8,56,23,7,'#f5d44b');label('READY',x+125,y+20,12,'#4b5316')}}}
+     if(state.weeds[i])sprite(24,x+22,y+5,102,75);if(state.bugs[i]&&state.crop[i])sprite(25,x+36,y+9,85,63);
+   }else if([2,7,12,17].includes(i))sprite(2,x+39,y-9,100,76);
+   click(x+18,y+24,133,82,()=>action(1,i,tool|(selected<<8)));
+ }}else{for(let i=0;i<3;i++){const x=130+i*222,y=279-(i%2)*37;rr(x+14,y+50,174,56,25,'#7fa943');if(state.animalOwned[i])sprite(26+i,x,y-46,190,125);else sprite(2,x+30,y-13,135,95);
+  label(animals[i],x+94,y+123,22,'#304f21');click(x,y-45,192,155,()=>{if(state.animalOwned[i])action(2,i,rt);else{popup='store';tab=0}})}sprite(29,665,388,148,104)}
+}
+function drawUI(){
+ rr(5,5,402,91,12,'#f7f2d9','#97734a',3);rr(14,14,69,69,7,'#fff9e8','#8a6847',3);sprite(35,2,5,92,77);
+ label('My Papaya Farm',94,28,23,'#443622','left');label('Cash: $'+state.cash,96,52,18,'#ae3153','left');label('Lvl '+lev()+'    RP: '+state.rp+'    Papayas: '+state.papayas,96,77,16,'#347a48','left');
+ const buttons=[['Friends',35,()=>{popup='friends';native({cmd:'list',offset:0})}],['Storage',36,()=>{popup='storage';tab=0}],['Store',37,()=>{popup='store';tab=0}],['Medals',38,()=>popup='medals'],['Refresh',39,()=>native({cmd:'refresh'})]];
+ buttons.forEach(([text,icon,fn],i)=>{const x=454+i*89;sprite(icon,x,5,88,84);label(text,x+44,94,12,'#fff1c1');click(x,2,89,101,fn)});
+ btn(state.quick?'FAST GROW x120':'CLASSIC TIMERS',716,109,175,33,()=>{if(view!==user){toast('Only your own farm can change timers.');return}action(7)},false,15);
+ btn('TASK',8,150,109,38,()=>popup='task'); btn(screen?'FARM':'RANCH',774,478,112,45,()=>{screen=1-screen;popup=''},false,18);
+ rr(143,548,616,88,14,'#258e70','#156049',5);rr(151,554,598,76,12,'#299b7e');
+ const ids=screen?[40,41,42]:[30,31,32,33,34],names=screen?['Water','Feed','Collect']:['Shovel','Seeds','Weeds','Bugs','Harvest'];
+ ids.forEach((id,i)=>{const x=screen?245+i*136:181+i*109,active=(screen?rt:tool)===i;if(active)rr(x-3,549,91,78,15,'#e6bd4b');sprite(id,x-6,550,99,70);label(names[i],x+38,617,13,'#fff4d3');click(x-2,550,95,83,()=>{if(screen)rt=i;else if(i===1){tool=i;popup='storage';tab=1}else tool=i})});
+ btn('MENU',9,573,94,37,()=>{popup='help'},false,15);
+ if(view!==user){rr(332,109,262,33,10,'#f5e7b7','#986c37',3);label('VISITING: '+view,465,126,18,'#8d5125')}
+}
+function drawPopup(){if(!popup)return;pic(panel,84,89,732,475);click(0,0,900,640,()=>{});const title={store:'STORE',storage:'STORAGE',friends:'Friends',medals:'Achievements',help:'Papaya Farm Classic',task:'Farm Tasks'}[popup]||'Farm';label(title,449,128,33,'#fff2bd');btn('X',719,114,57,43,()=>popup='',false,24);
+ if(popup==='store'||popup==='storage'){
+  const headers=popup==='store'?[screen?'Animals':'Seeds','Items','Special']:[screen?'Products':'Fruits',screen?'Animals':'Seeds','Tools'];headers.forEach((h,i)=>btn(h,152+i*137,174,125,38,()=>tab=i,tab===i,17));
+  if(popup==='store' && tab===0){const all=screen?animals:crops;all.forEach((name,i)=>{
+   const x=screen?178+i*185:145+(i%4)*157,y=screen?245:218+Math.floor(i/4)*145,w=screen?155:139,h=screen?205:137;
+   rr(x,y,w,h,10,'#fdf6db','#b9955c',3);sprite(screen?26+i:3+i*3+2,x+17,y+4,w-34,screen?120:78);label(name,x+w/2,y+(screen?127:84),16,'#537331');
+   if(screen){label('Pays $'+animalSale[i],x+w/2,y+151,13,'#694623');btn(state.animalOwned[i]?'OWNED':'BUY $'+animalCost[i],x+10,y+169,w-20,30,()=>action(4,i),false,14)}
+   else{label('Grow '+clock(growth(i))+'  Sell $'+cropSell[i],x+w/2,y+102,12,'#76522a');btn(lev()<cropLevel[i]?'LEVEL '+cropLevel[i]:'BUY $'+seedCost[i],x+8,y+111,w-16,29,()=>{selected=i;action(3,i)},false,14)}
+  });label('Tap a crop to buy seeds; choose Seeds to plant.',450,533,15)}
+  else if(popup==='store'&&tab===1){label('FERTILIZER',450,266,25);sprite(31,355,270,180,125);label('Speeds up all planted crops by half their grow time.',450,388,16);btn('BUY - 5 PAPAYAS',310,411,280,43,()=>toast('Papaya purchases are not available in this edition.'),false,17)}
+  else if(popup==='store'&&tab===2){sprite(44,355,257,180,130);label('Premium items are not yet available offline.',450,382,19)}
+  else if(popup==='storage'&&tab===2){label('Fertilizer: '+state.fertCount,450,315,25);btn('USE ON CROPS',315,374,272,48,()=>action(6),false,19)}
+  else if(popup==='storage'&&!screen){let count=0;const stocks=tab===0?state.harvested:state.inv;stocks.forEach((n,i)=>{if(!n)return;count+=n;const x=145+(i%4)*157,y=228+Math.floor(i/4)*153;rr(x,y,139,140,9,'#fff7dc','#bd9b5f',2);sprite(3+i*3+2,x+20,y+5,99,77);label(crops[i]+' ×'+n,x+69,y+90,16,'#557432');btn(tab===0?'SELL +$'+cropSell[i]:'SELECT',x+10,y+105,119,29,()=>{if(tab===0)action(5,i);else{selected=i;tool=1;popup=''}},false,14)});if(!count)label('Nothing here yet. Plant some seeds!',450,339,21)}
+  else{label('Animal goods are sold when collected.',450,334,20)}
+  return;
+ }
+ if(popup==='friends'){
+  label('Visit friends and earn Respect Points (RP)',450,185,21,'#5b4628');btn('BACK TO MY FARM',278,211,345,43,()=>{native({cmd:'home'});popup=''},false,18);
+  if(directory.length===0)label('No other farms yet. Create another account on a PC!',450,315,17);
+  directory.forEach((name,i)=>{const y=264+i*46;btn(name+(name===user?' (me)':''),217,y,460,38,()=>{if(name!==user){native({cmd:'visit',name});popup=''}else toast('This is your farm.')},false,18)});
+  label('Farms: '+total+'    Page '+(Math.floor(offset/5)+1),450,514,15);
+  btn('PREV',240,530,170,29,()=>native({cmd:'list',offset:Math.max(0,offset-5)}),false,14);
+  btn('NEXT',488,530,170,29,()=>native({cmd:'list',offset:offset+5}),false,14);
+  return;
+ }
+ if(popup==='medals'){label('Your Farm Milestones',450,207,27);label('Total Harvests: '+state.harvestTotal,450,274,23);label('Experience: '+state.xp+' XP',450,324,23);label('Respect Points: '+state.rp+' RP',450,374,23);label('Original Papaya Farm gave a prize every 300 RP.',450,441,18);return}
+ if(popup==='task'){label('FIRST HARVEST',450,227,29);['1. Plant wheat on an empty field.','2. Wait for the crop to grow.','3. Use Harvest when ripe.','4. Open Storage to sell your crops.'].forEach((s,i)=>label(s,450,277+i*43,18));return}
+ if(popup==='help'){label('Papaya Farm Classic • iPhone Edition',450,205,25);['Same NAS farms as Windows. Touch a field to farm.','Tools: Shovel, Seeds, Weeds, Bugs, Harvest.','Visit friends to help or steal ripe crops for RP.','All farm progress is stored on your Synology NAS.'].forEach((s,i)=>label(s,450,259+i*42,18));btn('DISCONNECT',318,457,262,45,()=>{popup='';native({cmd:'disconnect'})},false,18)}
+}
+function paint(){clickZones=[];ctx.clearRect(0,0,W,H);drawWorld();drawUI();drawPopup();requestAnimationFrame(paint)}
+function pointer(e){e.preventDefault();const r=cvs.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W,y=(e.clientY-r.top)/r.height*H;if(!connected)return;for(let i=clickZones.length-1;i>=0;i--){const z=clickZones[i];if(x>=z.x&&x<z.x+z.w&&y>=z.y&&y<z.y+z.h){z.fn();return}}}
+cvs.addEventListener('pointerup',pointer,{passive:false});
+window.addEventListener('contextmenu',e=>e.preventDefault());
+Promise.all([atlas,farmBG,ranchBG,panel].map(img=>new Promise(res=>{if(img.complete)res();else{img.onload=res;img.onerror=res}}))).then(()=>paint());
+</script></body></html>
